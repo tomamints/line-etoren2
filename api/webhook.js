@@ -47,49 +47,43 @@ module.exports = async (req, res) => {
 
   console.log("🧪 Webhook received:", JSON.stringify(req.body, null, 2));
   
-  // LINE署名検証
-  const signature = req.headers['x-line-signature'];
-  const body = JSON.stringify(req.body);
+  // 即座に200を返す（Vercel対応）
+  res.status(200).json({});
   
+  // イベント処理は非同期で実行
   try {
-    middleware(config)(req, res, async () => {
-      // 即座に200を返す
-      res.status(200).json({});
-
-      // イベント処理
+    let errorSent = false;
+    for (const event of req.body.events) {
       try {
-        let errorSent = false;
-        for (const event of req.body.events) {
-          try {
-            if (event.type === 'message' && event.message.type === 'file') {
-              if (recentMessageIds.has(event.message.id)) continue;
-              recentMessageIds.add(event.message.id);
-              
-              // サイズ制限（1000件まで保持）
-              if (recentMessageIds.size > 1000) {
-                const firstKey = recentMessageIds.values().next().value;
-                recentMessageIds.delete(firstKey);
-              }
-            }
-            await handleEvent(event);
-          } catch (err) {
-            console.error('=== 分析中にエラー ===', err);
-            if (!errorSent && event.source?.userId) {
-              await client.pushMessage(event.source.userId, {
-                type: 'text',
-                text: '⚠️ 分析中にエラーが発生しました。少々お待ちください🙏'
-              }).catch(console.error);
-              errorSent = true;
-            }
+        if (event.type === 'message' && event.message.type === 'file') {
+          if (recentMessageIds.has(event.message.id)) continue;
+          recentMessageIds.add(event.message.id);
+          
+          // サイズ制限（1000件まで保持）
+          if (recentMessageIds.size > 1000) {
+            const firstKey = recentMessageIds.values().next().value;
+            recentMessageIds.delete(firstKey);
           }
         }
-      } catch (fatal) {
-        console.error('🌋 Webhook 処理で致命的なエラー', fatal);
+        
+        // 非同期でイベント処理を実行
+        handleEvent(event).catch(err => {
+          console.error('=== handleEvent エラー ===', err);
+          if (!errorSent && event.source?.userId) {
+            client.pushMessage(event.source.userId, {
+              type: 'text',
+              text: '⚠️ 分析中にエラーが発生しました。少々お待ちください🙏'
+            }).catch(console.error);
+            errorSent = true;
+          }
+        });
+        
+      } catch (err) {
+        console.error('=== 分析中にエラー ===', err);
       }
-    });
-  } catch (err) {
-    console.error('Signature validation error:', err);
-    res.status(401).send('Unauthorized');
+    }
+  } catch (fatal) {
+    console.error('🌋 Webhook 処理で致命的なエラー', fatal);
   }
 };
 
