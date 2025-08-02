@@ -55,60 +55,10 @@ module.exports = async (req, res) => {
   console.log("🧪 Webhook received:", JSON.stringify(req.body, null, 2));
   
   try {
-    // すぐに処理中メッセージを送信
+    // 処理を実行してからレスポンスを返す
     for (const event of req.body.events) {
       if (event.type === 'message' && event.message.type === 'file') {
-        // 処理中メッセージを即座に送信
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: '📝 トーク履歴を分析中です...\nしばらくお待ちください（1-2分程度）'
-        }).catch(err => {
-          console.error('処理中メッセージ送信エラー:', err);
-        });
-        
-        // 処理を開始（別のAPI呼び出しやバックグラウンドジョブとして）
-        processFileInBackground(event);
-      }
-    }
-    
-    // 200を返す
-    res.status(200).json({});
-    console.log("✅ 200レスポンスを送信済み");
-    
-  } catch (error) {
-    console.error('🌋 致命的なエラー:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Internal Server Error' });
-    }
-  }
-};
-
-// バックグラウンドで処理（Vercel Functionsでは制限あり）
-async function processFileInBackground(event) {
-  try {
-    // 少し待機してから処理開始
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    await handleEvent(event);
-  } catch (err) {
-    console.error('バックグラウンド処理エラー:', err);
-    try {
-      await client.pushMessage(event.source.userId, {
-        type: 'text',
-        text: '⚠️ 分析中にエラーが発生しました。もう一度お試しください。'
-      });
-    } catch (pushErr) {
-      console.error('エラーメッセージ送信失敗:', pushErr);
-    }
-  }
-}
-
-// Webhookイベントを処理
-async function processWebhookEvents(events) {
-  console.log("🚀 processWebhookEvents 開始");
-  
-  for (const event of events) {
-    try {
-      if (event.type === 'message' && event.message.type === 'file') {
+        // 重複チェック
         if (recentMessageIds.has(event.message.id)) {
           console.log("⏭️ 重複メッセージをスキップ:", event.message.id);
           continue;
@@ -121,25 +71,44 @@ async function processWebhookEvents(events) {
           recentMessageIds.delete(firstKey);
         }
         
-        console.log("📋 イベント処理開始:", event.message.id);
-        await handleEvent(event);
-        console.log("✅ イベント処理完了:", event.message.id);
-      }
-    } catch (err) {
-      console.error('❌ イベント処理エラー:', err);
-      try {
-        await client.pushMessage(event.source.userId, {
-          type: 'text',
-          text: '⚠️ 分析中にエラーが発生しました。少々お待ちください🙏'
-        });
-      } catch (pushErr) {
-        console.error('❌ エラーメッセージ送信失敗:', pushErr);
+        try {
+          // 処理中メッセージを送信
+          await client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: '📝 トーク履歴を分析中です...\nしばらくお待ちください'
+          }).catch(err => {
+            console.error('処理中メッセージ送信エラー:', err);
+          });
+          
+          // 同期的に処理を実行（最大9秒）
+          const timeout = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Processing timeout')), 9000)
+          );
+          
+          await Promise.race([
+            handleEvent(event),
+            timeout
+          ]);
+          
+        } catch (err) {
+          console.error('イベント処理エラー:', err);
+          // エラーメッセージは handleEvent 内で送信される
+        }
       }
     }
+    
+    // すべての処理が完了してから200を返す
+    res.status(200).json({});
+    console.log("✅ 処理完了 & 200レスポンスを送信");
+    
+  } catch (error) {
+    console.error('🌋 致命的なエラー:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
   }
-  
-  console.log("🏁 processWebhookEvents 完了");
-}
+};
+
 
 async function handleEvent(event) {
   console.log("📥 handleEvent start!");
