@@ -53,44 +53,37 @@ app.use('/images', express.static(path.join(__dirname, 'images')));
 
 // ── ⑤ 重複防止
 const recentMessageIds = new Set();
-setInterval(() => recentMessageIds.clear(), 5 * 60 * 1000);
 
 // ── ⑥ Webhook
-app.post('/webhook', middleware(config), (req, res) => {
+app.post('/webhook', middleware(config), async (req, res) => {
   // 🟡🔽 ここにログ追加じゃ
   console.log("🧪 typeof body:", typeof req.body);
   console.log("🧪 body keys:", Object.keys(req.body || {}));
   console.log("🧪 full body:", JSON.stringify(req.body, null, 2));
 
-  res.status(200).json({}); // 🔴 まずレスポンス返す
+  // LINEに即座に200を返す
+  res.status(200).json({});
 
-  // 🔁 非同期処理は後から実行する
-  (async () => {
+  // イベント処理は非同期で実行（Vercel対応版）
   try {
-    let errorSent = false;
-    for (const event of req.body.events) {
-      try {
-        if (event.type === 'message' && event.message.type === 'file') {
-          if (recentMessageIds.has(event.message.id)) continue;
-          recentMessageIds.add(event.message.id);
-        }
-        await handleEvent(event);
-      } catch (err) {
-        console.error('=== 分析中にエラー ===', err);
-        if (!errorSent && event.source?.userId) {
-          await client.pushMessage(event.source.userId, {
+    const promises = req.body.events.map(event => {
+      if (event.type === 'message' && event.message.type === 'file') {
+        return handleEvent(event).catch(err => {
+          console.error('=== 分析中にエラー ===', err);
+          return client.pushMessage(event.source.userId, {
             type: 'text',
             text: '⚠️ 分析中にエラーが発生しました。少々お待ちください🙏'
-          });
-          errorSent = true;
-        }
+          }).catch(pushErr => console.error('Push message error:', pushErr));
+        });
       }
-    }
+      return Promise.resolve();
+    });
+    
+    // すべてのイベント処理を並行実行
+    await Promise.all(promises);
   } catch (fatal) {
     console.error('🌋 Webhook 処理で致命的なエラー', fatal);
   }
-})();
-
 });
 
 
@@ -178,10 +171,12 @@ async function handleEvent(event) {
 }
 
 // ── ⑧ 起動
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`⚡️ サーバー起動: http://localhost:${port}`);
-});
-
+// Vercel環境では自動的にサーバーが起動されるため、明示的なlistenは不要
+if (process.env.NODE_ENV !== 'production') {
+  const port = process.env.PORT || 3000;
+  app.listen(port, () => {
+    console.log(`⚡️ サーバー起動: http://localhost:${port}`);
+  });
+}
 
 module.exports = app;
