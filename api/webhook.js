@@ -72,14 +72,6 @@ module.exports = async (req, res) => {
         }
         
         try {
-          // 処理中メッセージを送信
-          await client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: '📝 トーク履歴を分析中です...\nしばらくお待ちください'
-          }).catch(err => {
-            console.error('処理中メッセージ送信エラー:', err);
-          });
-          
           // 同期的に処理を実行（最大9秒）
           const timeout = new Promise((_, reject) => 
             setTimeout(() => reject(new Error('Processing timeout')), 9000)
