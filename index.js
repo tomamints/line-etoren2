@@ -89,24 +89,64 @@ app.post('/webhook', middleware(config), async (req, res) => {
 
 // ── ⑦ イベント処理本体
 async function handleEvent(event) {
+  console.log('📌 handleEvent開始:', new Date().toISOString());
   if (event.type !== 'message' || event.message.type !== 'file') return;
 
   const userId = event.source.userId;
+  
+  // タイムアウト設定（8秒）
+  const timeout = new Promise((_, reject) => 
+    setTimeout(() => reject(new Error('処理がタイムアウトしました')), 8000)
+  );
+  
+  try {
+    await Promise.race([
+      processFile(event, userId),
+      timeout
+    ]);
+  } catch (error) {
+    console.error('エラー:', error.message);
+    throw error;
+  }
+}
+
+async function processFile(event, userId) {
+  console.log('📌 ファイルダウンロード開始:', new Date().toISOString());
   const stream = await client.getMessageContent(event.message.id);
   const chunks = [];
-  for await (const c of stream) chunks.push(c);
+  let chunkCount = 0;
+  for await (const c of stream) {
+    chunks.push(c);
+    chunkCount++;
+    if (chunkCount % 100 === 0) {
+      console.log(`📌 チャンク読み込み中: ${chunkCount}`);
+    }
+  }
+  console.log('📌 ファイルダウンロード完了:', new Date().toISOString(), 'チャンク数:', chunkCount);
   const rawText = Buffer.concat(chunks).toString('utf8');
 
+  console.log('📌 パース開始:', new Date().toISOString());
   const messages  = parser.parseTLText(rawText);
+  console.log('📌 メッセージ数:', messages.length);
+  
+  console.log('📌 プロフィール取得開始:', new Date().toISOString());
   const profile   = await client.getProfile(userId);
   const { self, other } = parser.extractParticipants(messages, profile.displayName);
   const selfName  = self;
   const otherName = other;
 
+  console.log('📌 各種分析開始:', new Date().toISOString());
   const recordsData  = records.calcAll({ messages, selfName, otherName });
+  console.log('📌 records完了:', new Date().toISOString());
+  
   const compData     = compatibility.calcAll({ messages, selfName, otherName, recordsData });
+  console.log('📌 compatibility完了:', new Date().toISOString());
+  
   const habitsData   = habits.calcAll({ messages, selfName, otherName });
+  console.log('📌 habits完了:', new Date().toISOString());
+  
   const behaviorData = await behavior.calcAll({ messages, selfName, otherName });
+  console.log('📌 behavior完了:', new Date().toISOString());
 
   const { animalType, scores: zodiacScores } = calcZodiacTypeScores({
     messages,
@@ -167,7 +207,9 @@ async function handleEvent(event) {
     }
   }
 
+  console.log('📌 メッセージ送信開始:', new Date().toISOString());
   await client.pushMessage(userId, carousel);
+  console.log('📌 handleEvent完了:', new Date().toISOString());
 }
 
 // ── ⑧ 起動
