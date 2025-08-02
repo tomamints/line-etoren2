@@ -54,45 +54,69 @@ module.exports = async (req, res) => {
 
   console.log("🧪 Webhook received:", JSON.stringify(req.body, null, 2));
   
-  // 即座に200を返す（Vercel対応）
-  res.status(200).json({});
+  // LINEにはすぐに200を返す必要があるが、軽量な処理は先に実行
+  const promises = [];
   
-  // イベント処理は非同期で実行
   try {
-    let errorSent = false;
     for (const event of req.body.events) {
-      try {
-        if (event.type === 'message' && event.message.type === 'file') {
-          if (recentMessageIds.has(event.message.id)) continue;
-          recentMessageIds.add(event.message.id);
-          
-          // サイズ制限（1000件まで保持）
-          if (recentMessageIds.size > 1000) {
-            const firstKey = recentMessageIds.values().next().value;
-            recentMessageIds.delete(firstKey);
-          }
+      if (event.type === 'message' && event.message.type === 'file') {
+        if (recentMessageIds.has(event.message.id)) continue;
+        recentMessageIds.add(event.message.id);
+        
+        // サイズ制限（1000件まで保持）
+        if (recentMessageIds.size > 1000) {
+          const firstKey = recentMessageIds.values().next().value;
+          recentMessageIds.delete(firstKey);
         }
         
-        // 非同期でイベント処理を実行
-        handleEvent(event).catch(err => {
-          console.error('=== handleEvent エラー ===', err);
-          if (!errorSent && event.source?.userId) {
-            client.pushMessage(event.source.userId, {
-              type: 'text',
-              text: '⚠️ 分析中にエラーが発生しました。少々お待ちください🙏'
-            }).catch(console.error);
-            errorSent = true;
-          }
+        // イベント処理をPromiseとして収集
+        const promise = processEventWithTimeout(event).catch(err => {
+          console.error('=== イベント処理エラー ===', err);
+          return client.pushMessage(event.source.userId, {
+            type: 'text',
+            text: '⚠️ 分析中にエラーが発生しました。少々お待ちください🙏'
+          }).catch(console.error);
         });
         
-      } catch (err) {
-        console.error('=== 分析中にエラー ===', err);
+        promises.push(promise);
       }
     }
+    
+    // 200を返す前に処理を開始（ただし完了は待たない）
+    if (promises.length > 0) {
+      // 最大8秒で処理を打ち切る
+      const timeoutPromise = new Promise(resolve => setTimeout(() => {
+        console.log("⏰ 8秒のタイムアウトに到達");
+        resolve('timeout');
+      }, 8000));
+      
+      Promise.race([
+        Promise.all(promises),
+        timeoutPromise
+      ]).then(() => {
+        console.log("✅ 処理完了またはタイムアウト");
+      });
+    }
+    
   } catch (fatal) {
     console.error('🌋 Webhook 処理で致命的なエラー', fatal);
   }
+  
+  // 即座に200を返す
+  res.status(200).json({});
 };
+
+// タイムアウト付きでイベントを処理
+async function processEventWithTimeout(event) {
+  const timeout = new Promise((_, reject) => 
+    setTimeout(() => reject(new Error('Event processing timeout')), 7000)
+  );
+  
+  return Promise.race([
+    handleEvent(event),
+    timeout
+  ]);
+}
 
 async function handleEvent(event) {
   console.log("📥 handleEvent start!");
