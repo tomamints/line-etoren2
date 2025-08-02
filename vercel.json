@@ -3,11 +3,11 @@
   "rewrites": [
     {
       "source": "/webhook",
-      "destination": "/api/index.js"
+      "destination": "/api/webhook.js"
     }
   ],
   "functions": {
-    "api/index.js": {
+    "api/webhook.js": {
       "includeFiles": "comments.json"
     }
   }
