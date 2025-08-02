@@ -15,11 +15,18 @@ const commentsData = JSON.parse(
   fs.readFileSync(path.join(__dirname, '../comments.json'), 'utf8')
 );
 
+console.log("🔧 環境変数チェック:");
+console.log("  - CHANNEL_ACCESS_TOKEN:", process.env.CHANNEL_ACCESS_TOKEN ? "設定済み" : "未設定");
+console.log("  - CHANNEL_SECRET:", process.env.CHANNEL_SECRET ? "設定済み" : "未設定");
+
 const config = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.CHANNEL_SECRET,
 };
+
+console.log("🔧 LINE Client 初期化中...");
 const client = new Client(config);
+console.log("🔧 LINE Client 初期化完了");
 
 function getScoreBand(score) {
   if (score >= 95) return '95';
@@ -101,7 +108,20 @@ async function handleEvent(event) {
   // ファイル読み込み
   let rawText = '';
   try {
-    const stream = await client.getMessageContent(event.message.id);
+    console.log("📥 client.getMessageContent を呼び出し中...");
+    console.log("  - message.id:", event.message.id);
+    console.log("  - client:", !!client);
+    console.log("  - client.getMessageContent:", typeof client.getMessageContent);
+    
+    // タイムアウト付きで実行（5秒）
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('getMessageContent timeout')), 5000)
+    );
+    
+    const stream = await Promise.race([
+      client.getMessageContent(event.message.id),
+      timeoutPromise
+    ]);
 
     // === ⭐️ stream取得ログ ===
     console.log("📥 stream を取得");
