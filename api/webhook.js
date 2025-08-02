@@ -55,14 +55,25 @@ module.exports = async (req, res) => {
   console.log("🧪 Webhook received:", JSON.stringify(req.body, null, 2));
   
   try {
-    // LINEは5秒以内にレスポンスを期待するので、まず即座に200を返す
+    // すぐに処理中メッセージを送信
+    for (const event of req.body.events) {
+      if (event.type === 'message' && event.message.type === 'file') {
+        // 処理中メッセージを即座に送信
+        await client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: '📝 トーク履歴を分析中です...\nしばらくお待ちください（1-2分程度）'
+        }).catch(err => {
+          console.error('処理中メッセージ送信エラー:', err);
+        });
+        
+        // 処理を開始（別のAPI呼び出しやバックグラウンドジョブとして）
+        processFileInBackground(event);
+      }
+    }
+    
+    // 200を返す
     res.status(200).json({});
     console.log("✅ 200レスポンスを送信済み");
-    
-    // 処理を別関数で実行（fire and forget）
-    processWebhookEvents(req.body.events).catch(err => {
-      console.error('🔥 processWebhookEvents エラー:', err);
-    });
     
   } catch (error) {
     console.error('🌋 致命的なエラー:', error);
@@ -71,6 +82,25 @@ module.exports = async (req, res) => {
     }
   }
 };
+
+// バックグラウンドで処理（Vercel Functionsでは制限あり）
+async function processFileInBackground(event) {
+  try {
+    // 少し待機してから処理開始
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await handleEvent(event);
+  } catch (err) {
+    console.error('バックグラウンド処理エラー:', err);
+    try {
+      await client.pushMessage(event.source.userId, {
+        type: 'text',
+        text: '⚠️ 分析中にエラーが発生しました。もう一度お試しください。'
+      });
+    } catch (pushErr) {
+      console.error('エラーメッセージ送信失敗:', pushErr);
+    }
+  }
+}
 
 // Webhookイベントを処理
 async function processWebhookEvents(events) {

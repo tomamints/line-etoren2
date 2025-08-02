@@ -8,7 +8,8 @@
   ],
   "functions": {
     "api/webhook.js": {
-      "includeFiles": "comments.json"
+      "includeFiles": "comments.json",
+      "maxDuration": 10
     }
   }
 }
