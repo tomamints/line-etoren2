@@ -54,13 +54,35 @@ module.exports = async (req, res) => {
 
   console.log("🧪 Webhook received:", JSON.stringify(req.body, null, 2));
   
-  // LINEにはすぐに200を返す必要があるが、軽量な処理は先に実行
-  const promises = [];
-  
   try {
-    for (const event of req.body.events) {
+    // LINEは5秒以内にレスポンスを期待するので、まず即座に200を返す
+    res.status(200).json({});
+    console.log("✅ 200レスポンスを送信済み");
+    
+    // 処理を別関数で実行（fire and forget）
+    processWebhookEvents(req.body.events).catch(err => {
+      console.error('🔥 processWebhookEvents エラー:', err);
+    });
+    
+  } catch (error) {
+    console.error('🌋 致命的なエラー:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  }
+};
+
+// Webhookイベントを処理
+async function processWebhookEvents(events) {
+  console.log("🚀 processWebhookEvents 開始");
+  
+  for (const event of events) {
+    try {
       if (event.type === 'message' && event.message.type === 'file') {
-        if (recentMessageIds.has(event.message.id)) continue;
+        if (recentMessageIds.has(event.message.id)) {
+          console.log("⏭️ 重複メッセージをスキップ:", event.message.id);
+          continue;
+        }
         recentMessageIds.add(event.message.id);
         
         // サイズ制限（1000件まで保持）
@@ -69,53 +91,24 @@ module.exports = async (req, res) => {
           recentMessageIds.delete(firstKey);
         }
         
-        // イベント処理をPromiseとして収集
-        const promise = processEventWithTimeout(event).catch(err => {
-          console.error('=== イベント処理エラー ===', err);
-          return client.pushMessage(event.source.userId, {
-            type: 'text',
-            text: '⚠️ 分析中にエラーが発生しました。少々お待ちください🙏'
-          }).catch(console.error);
+        console.log("📋 イベント処理開始:", event.message.id);
+        await handleEvent(event);
+        console.log("✅ イベント処理完了:", event.message.id);
+      }
+    } catch (err) {
+      console.error('❌ イベント処理エラー:', err);
+      try {
+        await client.pushMessage(event.source.userId, {
+          type: 'text',
+          text: '⚠️ 分析中にエラーが発生しました。少々お待ちください🙏'
         });
-        
-        promises.push(promise);
+      } catch (pushErr) {
+        console.error('❌ エラーメッセージ送信失敗:', pushErr);
       }
     }
-    
-    // 200を返す前に処理を開始（ただし完了は待たない）
-    if (promises.length > 0) {
-      // 最大8秒で処理を打ち切る
-      const timeoutPromise = new Promise(resolve => setTimeout(() => {
-        console.log("⏰ 8秒のタイムアウトに到達");
-        resolve('timeout');
-      }, 8000));
-      
-      Promise.race([
-        Promise.all(promises),
-        timeoutPromise
-      ]).then(() => {
-        console.log("✅ 処理完了またはタイムアウト");
-      });
-    }
-    
-  } catch (fatal) {
-    console.error('🌋 Webhook 処理で致命的なエラー', fatal);
   }
   
-  // 即座に200を返す
-  res.status(200).json({});
-};
-
-// タイムアウト付きでイベントを処理
-async function processEventWithTimeout(event) {
-  const timeout = new Promise((_, reject) => 
-    setTimeout(() => reject(new Error('Event processing timeout')), 7000)
-  );
-  
-  return Promise.race([
-    handleEvent(event),
-    timeout
-  ]);
+  console.log("🏁 processWebhookEvents 完了");
 }
 
 async function handleEvent(event) {
@@ -139,13 +132,20 @@ async function handleEvent(event) {
     
     // タイムアウト付きで実行（5秒）
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('getMessageContent timeout')), 5000)
+      setTimeout(() => reject(new Error('getMessageContent timeout (5s)')), 5000)
     );
     
+    console.log("📡 getMessageContent 呼び出し前");
+    
     const stream = await Promise.race([
-      client.getMessageContent(event.message.id),
+      client.getMessageContent(event.message.id).catch(err => {
+        console.error("❌ getMessageContent エラー詳細:", err);
+        throw err;
+      }),
       timeoutPromise
     ]);
+    
+    console.log("📡 getMessageContent 成功");
 
     // === ⭐️ stream取得ログ ===
     console.log("📥 stream を取得");
